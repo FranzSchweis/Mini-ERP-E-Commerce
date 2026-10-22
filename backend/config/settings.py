@@ -18,6 +18,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "rest_framework",
     "catalog",
+    "billing",
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
