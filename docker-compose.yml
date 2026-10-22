@@ -1,0 +1,21 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: mini-erp-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: mini_erp
+      MYSQL_USER: mini_erp
+      MYSQL_PASSWORD: change-this-password
+      MYSQL_ROOT_PASSWORD: change-root-password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mini_erp_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+volumes:
+  mini_erp_mysql_data:
