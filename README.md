@@ -1,124 +1,96 @@
-# Mini ERP — Product Catalogue and Delivery & Shipments
+# Del & Ship
 
-This shared repo began with **System 1: Product & Catalogue Management** and now also includes a separate **System 5: Delivery & Shipments** module. The systems share the app shell and backend project, while keeping their data ownership and feature code separate.
+Del & Ship is a mobile-friendly fulfillment workspace for managing shipment preparation, carrier details, delivery status, and shipment history. The current scope is shipping operations only; product-catalogue screens and API code have been removed. Shipment lines remain as item-description snapshots because packers need to know what is inside a shipment.
 
-## System 1 responsibility: Product & Catalogue
+## Features
 
-You own product identity and catalogue descriptions:
+- Shipment overview, all shipments, in-transit shipments, delivery exceptions, and delivered shipments.
+- Create one shipment per order with multiple item lines.
+- Edit carrier and tracking details without changing shipment status.
+- Permanently delete a delivered shipment after an in-app confirmation; other shipment statuses cannot be deleted.
+- Record status changes with history; delivery-failure updates require a reason.
+- Look up Sales orders to prefill shipment details, and expose authenticated APIs for inbound shipment handoff and status polling.
+- Username/password login backed by Django sessions and an HttpOnly cookie, with automatic sign-out after five minutes of inactivity.
+- Responsive mobile navigation and persisted light/dark appearance.
 
-- Product ID (database-generated and stable)
-- SKU (team-wide product code, e.g. `PRD-001`)
-- Name and description
-- Category
-- Catalogue unit price
-- Status: active, draft, or archived
+## Technology
 
-You do **not** own customer orders, stock quantities or stock movements, purchase orders/suppliers, invoices/payments, or shipments/tracking. The database and screen deliberately leave those to the teammates responsible for Systems 2–5. In particular, Sales should copy the agreed catalogue price onto each order line when the order is placed; Inventory should own stock quantities.
+- Frontend: React, TypeScript, Vite.
+- Backend: Django REST Framework.
+- Database: MySQL 8 for the shared/demo database. The Django settings also support SQLite for a quick isolated local run.
 
-## How the pieces talk to each other
+## Run locally on Windows
 
-The browser (Vite/React) sends requests to your Django API. Django reads/writes MySQL. The other systems should call the same Django API or agree on a shared database/service with the team. They should store your product's `id` or `sku` as a reference, not make their own competing product record.
+### 1. Start MySQL
 
-See [`docs/product-catalogue-api.md`](docs/product-catalogue-api.md) for the short handoff contract to share with the group.
+Start the **MySQL80** service from Windows Services (`Win + R` → `services.msc`). The MySQL server should have a schema/database named `mini_erp` and an account with permissions on it. Configure the database login in `backend/.env`; do not commit or share that file.
 
-## Run it, step by step
+### 2. Configure and start Django
 
-You need Python 3.10+, Node.js 20+, and MySQL 8. If you have Docker Desktop, it can start MySQL for you.
+Open PowerShell:
 
-### Step 1 — Get the project on your computer
-
-If you have Git installed, open Terminal (Mac/Linux) or PowerShell (Windows) and run:
-
-```bash
-git clone https://github.com/FranzSchweis/Mini-ERP-E-Commerce.git
-cd Mini-ERP-E-Commerce
-```
-
-If you already downloaded the project, open a terminal in that folder instead.
-
-### Step 2 — Start the database
-
-With Docker Desktop open, run:
-
-```bash
-docker compose up -d mysql
-```
-
-This starts a local MySQL database with the development settings in `docker-compose.yml`. Don't use those sample passwords for a real/public deployment. If your team already has a shared MySQL database, use its connection details in the next step instead.
-
-### Step 3 — Install and start the Django backend
-
-In the project terminal:
-
-```bash
-cd backend
+```powershell
+cd G:\SIA\Mini-ERP-E-Commerce\backend
 python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+Copy-Item .env.example .env
+notepad .env
 ```
 
-Activate the environment:
+In `.env`, set `MYSQL_PASSWORD` to the password for the `mini_erp` MySQL account (and ensure the database account exists). Keep this password private. For server-to-server integrations, also set a private `ERP_INTEGRATION_API_KEY` as described in the API handoff. Then run:
 
-- **Windows PowerShell:** `.venv\\Scripts\\Activate.ps1`
-- **Mac/Linux:** `source .venv/bin/activate`
-
-Then run:
-
-```bash
-python -m pip install -r requirements.txt
+```powershell
+.\.venv\Scripts\python.exe manage.py migrate
+.\.venv\Scripts\python.exe manage.py createsuperuser
+.\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8238
 ```
 
-Copy the sample database settings into a private local file:
+If you already have a Django login, skip `createsuperuser`. Leave this terminal open while using the app. Django serves the API at `http://127.0.0.1:8238/api/`.
 
-- **Windows PowerShell:** `Copy-Item .env.example .env`
-- **Mac/Linux:** `cp .env.example .env`
+### 3. Start the frontend
 
-For Docker's default settings, the example is already configured. Then create the database tables and start Django:
+Open a second PowerShell window:
 
-```bash
-python manage.py migrate
-python manage.py runserver
-```
-
-Leave this terminal window running. You should see a message that Django is serving at `http://127.0.0.1:8000/`. The categories are preloaded, so you can make a product immediately.
-
-### Step 4 — Start the Vite frontend in a second terminal
-
-Open a **second** terminal in the project folder, then run:
-
-```bash
-cd frontend
-npm install
+```powershell
+cd G:\SIA\Mini-ERP-E-Commerce\frontend
+npm ci
 npm run dev
 ```
 
-Open the local link Vite prints (usually `http://localhost:5173`). Keep both terminals running while using the app. Add a product in the form; it should appear in the Products table.
+Open `http://localhost:5170`, then sign in with your Django username and password. Keep both terminals open. Press `Ctrl+C` in each terminal to stop its server.
 
-### Step 5 — If something goes wrong
+### SQLite alternative
 
-- **The page says API not connected:** check the Django terminal is still running; refresh the webpage.
-- **Docker/MySQL isn't available:** in `backend/.env`, change `DB_ENGINE=mysql` to `DB_ENGINE=sqlite`, then run `python manage.py migrate` again. SQLite is fine for a quick local demo, but agree with your group before integration.
-- **A product won't save:** SKU must be unique. Try a new team SKU such as `PRD-002`; the category must also be selected.
-- **Stop the programs:** press `Ctrl+C` in each running terminal.
+For an isolated local demo without MySQL, set `DB_ENGINE=sqlite` in `backend/.env`, then run `manage.py migrate` and create a Django user as above. SQLite stores its file under `backend/db.sqlite3`; it is separate from the MySQL `mini_erp` schema.
 
-## Main API routes
+## API overview
 
-- `GET /api/health/` — check whether Django is running.
-- `GET /api/categories/` — list categories.
-- `GET /api/products/` — list products. Search using `?search=headphones`; filter using `?status=active` or `?category=1`.
-- `POST /api/products/` — create a product.
-- `GET /api/products/{id}/` — retrieve one product by database ID.
+Protected API routes require a Django session cookie. `GET /api/health/` and `GET /api/auth/csrf/` are public; login is also public but CSRF-protected. The session cookie is HttpOnly and uses a five-minute rolling timeout; active sessions are refreshed while the user is active. Mutating requests use Django CSRF protection. The Vite development server proxies `/api/` to Django so the browser sees a same-origin session cookie.
 
-Django REST Framework also provides update and delete routes. Coordinate any deletes with the group; once other systems reference a product, archiving it is safer than deleting it.
+- `GET /api/health/` — public backend health check.
+- `GET /api/auth/csrf/` — initialize the CSRF cookie/token for secure sign-in and write requests.
+- `POST /api/auth/login/`, `GET /api/auth/me/`, `POST /api/auth/logout/` — create, inspect, and destroy the authenticated session.
+- `GET /api/shipments/` — paginated shipment register; supports status and search filters.
+- `POST /api/shipments/` — create a shipment with one or more item snapshots.
+- `GET /api/shipments/{id}/` — shipment details, item lines, and status history.
+- `POST /api/shipments/{id}/status/` — validated status transition and optional event note.
+- `PATCH /api/shipments/{id}/logistics/` — update only carrier and tracking number.
+- `DELETE /api/shipments/{id}/` — delete only delivered shipments, including their item lines and status history.
+- `GET /api/integrations/sales-orders/{order_number}/` — read a Sales order from the configured shared database for fulfillment review.
+- `POST /api/integrations/shipments/` — idempotently receive a shipment snapshot from an upstream system.
+- `GET /api/integrations/shipments/{order_reference}/` — allow an upstream system to poll shipment status and history.
 
-## Before group integration
+The API contract and ownership boundaries are documented in [`docs/del-and-ship-api.md`](docs/del-and-ship-api.md).
 
-1. Agree on the SKU pattern (for example, `PRD-001`, `PRD-002`) and who creates each product.
-2. Share the API contract with the other four members.
-3. Ask each member to use your product's ID or SKU in their order, inventory, invoice, or shipment records.
-4. Agree on one database/API environment and update the `.env` settings together.
-5. Add login/permissions only after the group agrees how authentication will work. This scaffold is for local development and currently does not protect the API.
+## ERP integration readiness
 
-## System 5 — Delivery & Shipments
+The integration app adds no database tables or migrations. It reads Sales orders and product/customer snapshots from the agreed shared tables and writes only Del & Ship-owned shipment records. The supplied SQL file is a complete-schema script for an empty database; do **not** run it against the current database. The current database does not yet contain the Sales order tables, so Sales lookup will return HTTP 503 until the Sales module tables are available. Manual shipment creation and authenticated inbound API requests remain usable.
 
-The shared app now includes a separate System 5 shipment module under `backend/shipments/` and `frontend/src/modules/delivery/`. It owns shipment details and status history, while order references remain external IDs owned by Sales & Orders. The current classroom MVP allows staff to enter demo order details until the Orders API is agreed and available.
+External services authenticate with `X-ERP-Integration-Key`; configure that key in the private `backend/.env` before enabling callers. Use HTTPS and keep the key out of source control. The browser UI uses the existing session/CSRF authentication instead.
 
-See [`docs/system5-shipment-api.md`](docs/system5-shipment-api.md) for the shipment boundary, status transitions, and API contract. After pulling this branch, run `python manage.py migrate` from `backend/` before opening the Delivery & Shipments page.
+## Notes for this redesign
+
+- Create at least one Django user with `manage.py createsuperuser` before logging in.
+- Login automatically expires after five minutes without activity; activity keeps the Django session alive and returns you to the login screen after idle sign-out.
+- The authentication is intended for a classroom/local demonstration. Configure HTTPS, stronger password policy, secure deployment settings, and secret management before any public deployment.
+- Removing the catalogue application removes its code and routes; it does **not** automatically drop existing MySQL tables or erase database data. Shipment records and shipment item snapshots are preserved.

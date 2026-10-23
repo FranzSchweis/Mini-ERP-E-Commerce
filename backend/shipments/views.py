@@ -31,7 +31,7 @@ class ShipmentViewSet(viewsets.ModelViewSet):
     serializer_class = ShipmentSerializer
     queryset = Shipment.objects.all()
     pagination_class = ShipmentPagination
-    http_method_names = ["get", "post", "patch", "head", "options"]
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
         queryset = Shipment.objects.prefetch_related("items", "events")
@@ -51,6 +51,15 @@ class ShipmentViewSet(viewsets.ModelViewSet):
 
     def partial_update(self, request, *args, **kwargs):
         raise MethodNotAllowed("PATCH")
+
+    def destroy(self, request, *args, **kwargs):
+        with transaction.atomic():
+            shipment = get_object_or_404(self.get_queryset().select_for_update(), pk=kwargs.get("pk"))
+            self.check_object_permissions(request, shipment)
+            if shipment.status != Shipment.Status.DELIVERED:
+                raise ValidationError({"status": "Only delivered shipments can be deleted."})
+            shipment.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=["post"], url_path="status")
     def update_status(self, request, pk=None):

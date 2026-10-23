@@ -1,5 +1,5 @@
 import { Fragment, FormEvent, useEffect, useMemo, useState } from 'react';
-import './delivery.css';
+import { apiFetch } from '../../lib/api';
 
 type ShipmentStatus = 'ready_to_pack' | 'packing' | 'ready_to_dispatch' | 'in_transit' | 'delivered' | 'delivery_failed' | 'cancelled';
 type ShipmentItem = { id: number; product_reference: string; product_name: string; quantity: number };
@@ -18,10 +18,19 @@ type Shipment = {
   created_at: string;
   updated_at: string;
 };
-type ItemRow = { key: number };
+type ItemRow = { key: number; productReference?: string; productName?: string; quantity?: number };
+type SalesOrderItem = { source_line_id: number; product_reference: string; product_name: string; quantity: number };
+type SalesOrderLookup = {
+  source_order_id: number;
+  order_reference: string;
+  source_status: string;
+  recipient_name: string;
+  delivery_address: string;
+  items: SalesOrderItem[];
+};
 type StatusDraft = { shipmentId: number; next: ShipmentStatus };
+export type DeliveryView = 'overview' | 'shipments' | 'transit' | 'exceptions' | 'delivered';
 
-const API = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
 const STATUS_LABELS: Record<ShipmentStatus, string> = {
   ready_to_pack: 'Ready to pack', packing: 'Packing', ready_to_dispatch: 'Ready to dispatch',
   in_transit: 'In transit', delivered: 'Delivered', delivery_failed: 'Delivery failed', cancelled: 'Cancelled',
@@ -34,9 +43,19 @@ const NEXT_STATUS: Record<ShipmentStatus, ShipmentStatus[]> = {
   delivery_failed: ['in_transit', 'cancelled'],
   delivered: [], cancelled: [],
 };
+const PAGE_META: Record<DeliveryView, { title: string; description: string; eyebrow: string }> = {
+  overview: { title: 'Your delivery desk', description: 'A clear view of every package moving through your operation.', eyebrow: 'OPERATIONS OVERVIEW' },
+  shipments: { title: 'All shipments', description: 'Create, search, and manage every shipment in one place.', eyebrow: 'SHIPMENT REGISTER' },
+  transit: { title: 'In transit', description: 'Follow shipments that have been handed to a carrier.', eyebrow: 'ON THE MOVE' },
+  exceptions: { title: 'Delivery exceptions', description: 'Review failed deliveries and coordinate the next attempt.', eyebrow: 'NEEDS ATTENTION' },
+  delivered: { title: 'Delivered shipments', description: 'Completed deliveries and their fulfillment details.', eyebrow: 'COMPLETED' },
+};
 
-function displayDate(value: string) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
+type Props = { view: DeliveryView; onNavigate: (view: DeliveryView) => void };
+
+function formatDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 }
 
 function apiMessage(body: unknown) {
@@ -47,14 +66,20 @@ function apiMessage(body: unknown) {
   return 'The request could not be completed.';
 }
 
-export default function DeliveryPage() {
+export default function DeliveryPage({ view, onNavigate }: Props) {
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [showExceptionTip, setShowExceptionTip] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [salesOrderNumber, setSalesOrderNumber] = useState('');
+  const [salesOrderBusy, setSalesOrderBusy] = useState(false);
+  const [salesOrderMessage, setSalesOrderMessage] = useState('');
+  const [loadedSalesOrder, setLoadedSalesOrder] = useState<SalesOrderLookup | null>(null);
+  const [formRevision, setFormRevision] = useState(0);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [itemRows, setItemRows] = useState<ItemRow[]>([{ key: 0 }]);
   const [nextItemKey, setNextItemKey] = useState(1);
@@ -62,16 +87,22 @@ export default function DeliveryPage() {
   const [statusNote, setStatusNote] = useState('');
   const [editingLogisticsId, setEditingLogisticsId] = useState<number | null>(null);
 
+  useEffect(() => {
+    if (!notice) return;
+    const timeout = window.setTimeout(() => setNotice(''), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
+
   async function loadShipments() {
     setBusy(true);
     setError('');
     try {
-      const response = await fetch(`${API}/shipments/?page_size=100`);
-      if (!response.ok) throw new Error(`Shipment API returned ${response.status}.`);
+      const response = await apiFetch('shipments/?page_size=100');
       const body = await response.json();
+      if (!response.ok) throw new Error(apiMessage(body));
       setShipments(Array.isArray(body) ? body : body.results ?? []);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not reach Django. Start the backend, then refresh.');
+      setError(reason instanceof Error ? reason.message : 'Could not reach the shipment service. Check that Django is running.');
     } finally {
       setBusy(false);
     }
@@ -79,18 +110,59 @@ export default function DeliveryPage() {
 
   useEffect(() => { void loadShipments(); }, []);
 
-  const visibleShipments = useMemo(() => shipments.filter((shipment) => {
-    const text = `${shipment.order_reference} ${shipment.recipient_name} ${shipment.tracking_number} ${shipment.carrier}`.toLowerCase();
-    return (!query || text.includes(query.toLowerCase())) && (!filter || shipment.status === filter);
-  }), [shipments, query, filter]);
+  const scopeShipments = useMemo(() => {
+    switch (view) {
+      case 'transit': return shipments.filter((shipment) => shipment.status === 'in_transit');
+      case 'exceptions': return shipments.filter((shipment) => shipment.status === 'delivery_failed');
+      case 'delivered': return shipments.filter((shipment) => shipment.status === 'delivered');
+      default: return shipments;
+    }
+  }, [shipments, view]);
+  const visibleShipments = useMemo(() => scopeShipments.filter((shipment) => {
+    const searchable = `${shipment.order_reference} ${shipment.recipient_name} ${shipment.tracking_number} ${shipment.carrier}`.toLowerCase();
+    return (!query || searchable.includes(query.toLowerCase())) && (!statusFilter || shipment.status === statusFilter);
+  }), [scopeShipments, query, statusFilter]);
+  const orderedShipments = useMemo(() => [...visibleShipments].sort((a, b) => b.updated_at.localeCompare(a.updated_at)), [visibleShipments]);
 
   function addItemRow() {
     setItemRows((rows) => [...rows, { key: nextItemKey }]);
     setNextItemKey((key) => key + 1);
   }
-
   function removeItemRow(key: number) {
     setItemRows((rows) => rows.length > 1 ? rows.filter((row) => row.key !== key) : rows);
+  }
+
+  async function loadSalesOrder() {
+    const orderNumber = salesOrderNumber.trim();
+    setSalesOrderMessage('');
+    if (!orderNumber) {
+      setSalesOrderMessage('Enter a Sales order number to look it up.');
+      return;
+    }
+    setSalesOrderBusy(true);
+    try {
+      const response = await apiFetch(`integrations/sales-orders/${encodeURIComponent(orderNumber)}/`);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(apiMessage(body));
+      if (!Array.isArray(body.items)) throw new Error('The Sales system returned an invalid order payload.');
+
+      const firstKey = nextItemKey;
+      const rows = (body.items as SalesOrderItem[]).map((item, index) => ({
+        key: firstKey + index,
+        productReference: item.product_reference,
+        productName: item.product_name,
+        quantity: item.quantity,
+      }));
+      setItemRows(rows.length ? rows : [{ key: firstKey }]);
+      setNextItemKey(firstKey + Math.max(rows.length, 1));
+      setLoadedSalesOrder(body as SalesOrderLookup);
+      setFormRevision((revision) => revision + 1);
+      setSalesOrderMessage(`Loaded ${body.order_reference} (${body.source_status}). Review the details before creating the shipment.`);
+    } catch (reason) {
+      setSalesOrderMessage(reason instanceof Error ? reason.message : 'Could not load that Sales order.');
+    } finally {
+      setSalesOrderBusy(false);
+    }
   }
 
   async function createShipment(event: FormEvent<HTMLFormElement>) {
@@ -114,24 +186,27 @@ export default function DeliveryPage() {
       })),
     };
     try {
-      const response = await fetch(`${API}/shipments/`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-      });
+      const response = await apiFetch('shipments/', { method: 'POST', body: JSON.stringify(payload) });
       const body = await response.json();
       if (!response.ok) throw new Error(apiMessage(body));
       form.reset();
       setItemRows([{ key: nextItemKey }]);
       setNextItemKey((key) => key + 1);
+      setLoadedSalesOrder(null);
+      setSalesOrderNumber('');
+      setSalesOrderMessage('');
+      setFormRevision((revision) => revision + 1);
       setShowForm(false);
-      setNotice(`Shipment for ${body.order_reference} created with ${body.items.length} item line(s).`);
+      setNotice(`Shipment ${body.order_reference} created with ${body.items.length} item line(s).`);
       await loadShipments();
     } catch (reason) {
-      setNotice(reason instanceof Error ? reason.message : 'Could not create shipment.');
+      setNotice(reason instanceof Error ? reason.message : 'Could not create the shipment.');
     }
   }
 
   function openStatusForm(shipment: Shipment, next: ShipmentStatus) {
     setExpanded(shipment.id);
+    setEditingLogisticsId(null);
     setStatusDraft({ shipmentId: shipment.id, next });
     setStatusNote('');
     setNotice('');
@@ -140,14 +215,14 @@ export default function DeliveryPage() {
   async function changeStatus(shipment: Shipment, next: ShipmentStatus, note: string) {
     setNotice('');
     try {
-      const response = await fetch(`${API}/shipments/${shipment.id}/status/`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: next, note: note.trim() }),
+      const response = await apiFetch(`shipments/${shipment.id}/status/`, {
+        method: 'POST', body: JSON.stringify({ status: next, note: note.trim() }),
       });
       const body = await response.json();
       if (!response.ok) throw new Error(apiMessage(body));
       setStatusDraft(null);
       setStatusNote('');
-      setNotice(`${shipment.order_reference} updated to ${STATUS_LABELS[next]}.`);
+      setNotice(`${shipment.order_reference} moved to ${STATUS_LABELS[next]}.`);
       await loadShipments();
     } catch (reason) {
       setNotice(reason instanceof Error ? reason.message : 'Could not update shipment status.');
@@ -163,94 +238,140 @@ export default function DeliveryPage() {
       tracking_number: String(values.get('tracking_number') ?? '').trim(),
     };
     try {
-      const response = await fetch(`${API}/shipments/${shipment.id}/logistics/`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-      });
+      const response = await apiFetch(`shipments/${shipment.id}/logistics/`, { method: 'PATCH', body: JSON.stringify(payload) });
       const body = await response.json();
       if (!response.ok) throw new Error(apiMessage(body));
       setEditingLogisticsId(null);
-      setNotice(`Courier details for ${shipment.order_reference} saved.`);
+      setNotice(`Carrier details for ${shipment.order_reference} saved.`);
       await loadShipments();
     } catch (reason) {
-      setNotice(reason instanceof Error ? reason.message : 'Could not save courier details.');
+      setNotice(reason instanceof Error ? reason.message : 'Could not save carrier details.');
+    }
+  }
+
+  async function deleteDeliveredShipment(shipment: Shipment) {
+    const confirmed = window.confirm(`Delete delivered shipment ${shipment.order_reference}? Its item lines and status history will also be permanently deleted.`);
+    if (!confirmed) return;
+    setNotice('');
+    try {
+      const response = await apiFetch(`shipments/${shipment.id}/`, { method: 'DELETE' });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(apiMessage(body));
+      }
+      setExpanded(null);
+      setEditingLogisticsId(null);
+      setStatusDraft(null);
+      setNotice(`Delivered shipment ${shipment.order_reference} deleted.`);
+      await loadShipments();
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : 'Could not delete the shipment.');
     }
   }
 
   const activeCount = shipments.filter((shipment) => !['delivered', 'cancelled'].includes(shipment.status)).length;
-  const inTransitCount = shipments.filter((shipment) => shipment.status === 'in_transit').length;
+  const transitCount = shipments.filter((shipment) => shipment.status === 'in_transit').length;
   const deliveredCount = shipments.filter((shipment) => shipment.status === 'delivered').length;
   const failedCount = shipments.filter((shipment) => shipment.status === 'delivery_failed').length;
+  useEffect(() => {
+    if (view !== 'exceptions' || failedCount === 0) {
+      setShowExceptionTip(false);
+      return;
+    }
+    setShowExceptionTip(true);
+    const timeout = window.setTimeout(() => setShowExceptionTip(false), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [view, failedCount]);
+  const attentionShipments = shipments.filter((shipment) => shipment.status === 'delivery_failed').slice(0, 4);
+  const recentShipments = [...shipments].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 5);
+  const meta = PAGE_META[view];
+  const statusOptions = Object.entries(STATUS_LABELS) as [ShipmentStatus, string][];
 
-  return <section className="content delivery-page">
-    <div className="page-heading">
-      <div><div className="eyebrow">SYSTEM 5 · FULFILLMENT OWNER</div><h1>Delivery &amp; Shipments</h1><p>Prepare packages, record dispatch, and follow delivery outcomes.</p></div>
-      <div className="heading-actions"><button className="secondary" type="button" onClick={() => void loadShipments()}>Refresh</button><button className="primary" type="button" onClick={() => { setShowForm((open) => !open); setNotice(''); }}>＋ Create shipment</button></div>
-    </div>
+  return <div className="workspace-content">
+    <div className="page-intro"><div><span className="eyebrow">{meta.eyebrow}</span><h1>{meta.title}</h1><p>{meta.description}</p></div><div className="page-intro-actions"><button className="button-secondary" type="button" onClick={() => void loadShipments()}>↻ <span>Refresh</span></button>{(view === 'overview' || view === 'shipments') && <button className="button-primary" type="button" onClick={() => { setShowForm((current) => !current); setNotice(''); }}><span>＋</span> Create shipment</button>}</div></div>
 
-    {error && <div className="alert"><strong>Shipment API unavailable</strong><span>{error} The module can be reviewed once the Django backend and migrations are running.</span></div>}
-    {notice && <div className="delivery-notice" role="status">{notice}</div>}
+    {error && <div className="alert-banner" role="alert"><span className="alert-mark">!</span><div><strong>Couldn’t load shipments</strong><p>{error}</p></div></div>}
+    {notice && <div className="notice-banner" role="status"><span>✓</span>{notice}<i className="notice-timer" key={notice}/></div>}
 
-    <div className="stats delivery-stats">
-      <article><span>Active shipments</span><strong>{activeCount}</strong><small>Not yet delivered or cancelled</small></article>
-      <article><span>In transit</span><strong>{inTransitCount}</strong><small>Handed to a carrier</small></article>
-      <article><span>Delivered</span><strong>{deliveredCount}</strong><small>Delivery confirmed</small></article>
-      <article><span>Needs attention</span><strong>{failedCount}</strong><small>Delivery exceptions</small></article>
-    </div>
+    <section className="metric-grid" aria-label="Shipment summary">
+      <article className="metric-card"><div className="metric-card-top"><span>Active shipments</span><span className="metric-icon metric-purple">▤</span></div><strong>{busy ? '—' : activeCount}</strong><small>In the fulfillment pipeline</small></article>
+      <article className="metric-card"><div className="metric-card-top"><span>In transit</span><span className="metric-icon metric-blue">↗</span></div><strong>{busy ? '—' : transitCount}</strong><small>With a delivery carrier</small></article>
+      <article className="metric-card"><div className="metric-card-top"><span>Delivered</span><span className="metric-icon metric-green">✓</span></div><strong>{busy ? '—' : deliveredCount}</strong><small>Successfully completed</small></article>
+      <article className={`metric-card ${failedCount ? 'metric-attention' : ''}`}><div className="metric-card-top"><span>Needs attention</span><span className="metric-icon metric-amber">!</span></div><strong>{busy ? '—' : failedCount}</strong><small>Delivery exceptions to review</small></article>
+    </section>
 
-    {showForm && <section className="panel delivery-form-panel">
-      <div className="panel-head"><div><h2>Create a shipment</h2><p>Enter an order reference supplied by the Sales team. One shipment per order is supported in this demo.</p></div><button className="icon-button" type="button" aria-label="Close shipment form" onClick={() => setShowForm(false)}>×</button></div>
-      <form className="delivery-form" onSubmit={createShipment}>
-        <label>Order reference<input name="order_reference" required maxLength={64} placeholder="e.g. ORD-1001" /></label>
-        <label>Recipient name<input name="recipient_name" required maxLength={180} placeholder="Recipient" /></label>
-        <label className="delivery-wide">Delivery address<textarea name="delivery_address" required rows={2} placeholder="Address snapshot for this shipment" /></label>
-        <label>Carrier<input name="carrier" maxLength={120} placeholder="e.g. Campus Courier" /></label>
-        <label>Tracking number<input name="tracking_number" maxLength={120} placeholder="Optional before dispatch" /></label>
-        <div className="delivery-items">
-          <div className="delivery-items-head"><div><strong>Shipment items</strong><span>Add each product and quantity included in this package.</span></div><button className="secondary" type="button" onClick={addItemRow}>＋ Add item</button></div>
-          {itemRows.map((row, index) => <div className="delivery-item-row" key={row.key}>
-            <label>Product reference<input name="product_reference" maxLength={64} placeholder="Optional SKU or ID" /></label>
-            <label>Item description<input name="product_name" required maxLength={180} placeholder={`Item ${index + 1}`} /></label>
-            <label>Quantity<input name="quantity" type="number" min="1" step="1" defaultValue="1" required /></label>
-            <button className="action-button delivery-remove" type="button" aria-label={`Remove item ${index + 1}`} title="Remove item" disabled={itemRows.length === 1} onClick={() => removeItemRow(row.key)}>×</button>
-          </div>)}
+    {view === 'overview' && <div className="overview-grid">
+      <section className="surface overview-panel"><div className="section-heading"><div><span className="eyebrow">RECENT ACTIVITY</span><h2>Recently updated</h2><p>Your latest shipment changes.</p></div><span className="section-counter">{shipments.length} total</span></div>
+        {busy ? <div className="empty-state">Loading your shipment activity…</div> : recentShipments.length ? <ShipmentTable shipments={recentShipments} expanded={expanded} setExpanded={setExpanded} setEditingLogisticsId={setEditingLogisticsId} editingLogisticsId={editingLogisticsId} statusDraft={statusDraft} statusNote={statusNote} setStatusNote={setStatusNote} setStatusDraft={setStatusDraft} updateLogistics={updateLogistics} changeStatus={changeStatus} openStatusForm={openStatusForm} allowDelete={false} deleteShipment={deleteDeliveredShipment}/> : <EmptyShipments error={error}/>}
+      </section>
+      <aside className="surface attention-panel"><div className="section-heading"><div><span className="eyebrow">ACTION QUEUE</span><h2>Delivery exceptions</h2><p>Failed attempts that may need follow-up.</p></div><span className={`queue-badge ${failedCount ? 'queue-badge-active' : ''}`}>{failedCount}</span></div>
+        {attentionShipments.length ? <div className="attention-list">{attentionShipments.map((shipment) => <button className="attention-item" key={shipment.id} type="button" onClick={() => onNavigate('exceptions')}><span className="attention-item-mark">!</span><span><strong>{shipment.order_reference}</strong><small>{shipment.recipient_name}</small></span><span className="attention-arrow">→</span></button>)}</div> : <div className="queue-clear"><span>✓</span><strong>All clear</strong><p>There are no failed delivery attempts to review.</p></div>}
+      </aside>
+    </div>}
+
+    {view === 'exceptions' && failedCount > 0 && showExceptionTip && <div className="info-banner" role="status"><span>i</span>Check the event history for the recorded failure reason before scheduling a redelivery.<i className="notice-timer" key={`exception-${failedCount}`}/></div>}
+
+    {showForm && (view === 'overview' || view === 'shipments') && <section className="surface form-surface">
+      <div className="section-heading"><div><span className="eyebrow">NEW FULFILLMENT RECORD</span><h2>Create a shipment</h2><p>Load an order from Sales or enter fulfillment details manually.</p></div><button className="icon-close" type="button" aria-label="Close form" onClick={() => setShowForm(false)}>×</button></div>
+      <div className="integration-lookup"><div className="integration-lookup-copy"><strong>Look up a Sales order</strong><small>Reads shared Sales data; shipment creation still requires your review and confirmation.</small></div><div className="integration-lookup-controls"><input aria-label="Sales order number" value={salesOrderNumber} onChange={(event) => setSalesOrderNumber(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void loadSalesOrder(); } }} placeholder="e.g. SO-1001"/><button className="button-secondary button-small" type="button" onClick={() => void loadSalesOrder()} disabled={salesOrderBusy}>{salesOrderBusy ? 'Loading…' : 'Load order'}</button></div>{salesOrderMessage && <p className="integration-lookup-message" role="status">{salesOrderMessage}</p>}</div>
+      <form key={formRevision} className="shipment-form" onSubmit={createShipment}>
+        <label>Order reference<input name="order_reference" required maxLength={64} defaultValue={loadedSalesOrder?.order_reference ?? ''} placeholder="ORD-1001"/></label>
+        <label>Recipient name<input name="recipient_name" required maxLength={180} defaultValue={loadedSalesOrder?.recipient_name ?? ''} placeholder="Recipient name"/></label>
+        <label className="field-span-2">Delivery address<textarea name="delivery_address" required rows={2} defaultValue={loadedSalesOrder?.delivery_address ?? ''} placeholder="Delivery address snapshot"/></label>
+        <label>Carrier<input name="carrier" maxLength={120} placeholder="Assign later if unknown"/></label>
+        <label>Tracking number<input name="tracking_number" maxLength={120} placeholder="Optional before dispatch"/></label>
+        <div className="item-lines field-span-2"><div className="item-lines-heading"><div><strong>Shipment items</strong><span>Enter each item and its quantity.</span></div><button className="button-secondary button-small" type="button" onClick={addItemRow}>＋ Add item</button></div>
+          {itemRows.map((row, index) => <div className="item-line" key={row.key}><label>Product reference<input name="product_reference" maxLength={64} defaultValue={row.productReference ?? ''} placeholder="Optional SKU"/></label><label>Item description<input name="product_name" required maxLength={180} defaultValue={row.productName ?? ''} placeholder={`Item ${index + 1}`}/></label><label>Qty<input name="quantity" type="number" min="1" step="1" defaultValue={row.quantity ?? 1} required/></label><button className="remove-item" type="button" disabled={itemRows.length === 1} title="Remove item" aria-label={`Remove item ${index + 1}`} onClick={() => removeItemRow(row.key)}>×</button></div>)}
         </div>
-        <div className="delivery-form-submit"><span role="status">{notice}</span><button className="primary" type="submit">Create shipment</button></div>
+        <div className="form-actions field-span-2"><span role="status">{notice}</span><button className="button-primary" type="submit">Create shipment <span>→</span></button></div>
       </form>
     </section>}
 
-    <section className="panel">
-      <div className="panel-head"><div><h2>Shipment register</h2><p>Search by order, recipient, courier, or tracking number.</p></div></div>
-      <div className="toolbar delivery-toolbar"><input aria-label="Search shipments" placeholder="⌕  Search shipments…" value={query} onChange={(event) => setQuery(event.target.value)} /><select aria-label="Filter shipments by status" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="">All statuses</option>{Object.entries(STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
-      <div className="table-wrap"><table className="delivery-table"><thead><tr><th>ORDER / SHIPMENT</th><th>RECIPIENT</th><th>COURIER / TRACKING</th><th>ITEMS</th><th>STATUS</th><th>LAST UPDATED</th><th>ACTIONS</th></tr></thead><tbody>
-        {busy ? <tr><td colSpan={7} className="empty">Loading shipments…</td></tr> : visibleShipments.length ? visibleShipments.map((shipment) => <Fragment key={shipment.id}>
-          <tr>
-            <td><div className="delivery-order"><strong>{shipment.order_reference}</strong><small>SHIP-{String(shipment.id).padStart(4, '0')}</small></div></td>
-            <td>{shipment.recipient_name}</td>
-            <td><div className="delivery-order"><strong>{shipment.carrier || 'Carrier not assigned'}</strong><small>{shipment.tracking_number || 'No tracking number yet'}</small></div></td>
-            <td>{shipment.items.length} line(s) · {shipment.items.reduce((sum, item) => sum + item.quantity, 0)} unit(s)</td>
-            <td><span className={`badge delivery-status ${shipment.status}`}>{shipment.status_label}</span></td>
-            <td>{displayDate(shipment.updated_at)}</td>
-            <td><div className="delivery-actions"><button className="action-button" type="button" onClick={() => setExpanded(expanded === shipment.id ? null : shipment.id)}>{expanded === shipment.id ? 'Hide' : 'Details'}</button><button className="action-button delivery-next" type="button" onClick={() => { setExpanded(shipment.id); setEditingLogisticsId(editingLogisticsId === shipment.id ? null : shipment.id); }}>Edit logistics</button>{NEXT_STATUS[shipment.status].map((next) => <button key={next} className="action-button delivery-next" type="button" onClick={() => openStatusForm(shipment, next)}>{STATUS_LABELS[next]}</button>)}</div></td>
-          </tr>
-          {expanded === shipment.id && <tr><td colSpan={7} className="delivery-expanded"><div className="delivery-detail-grid">
-            <div><h3>Delivery details</h3><p><strong>Address:</strong> {shipment.delivery_address}</p><p><strong>Shipment created:</strong> {displayDate(shipment.created_at)}</p><ul>{shipment.items.map((item) => <li key={item.id}>{item.product_name} · {item.product_reference || 'No product ID'} · Qty {item.quantity}</li>)}</ul></div>
-            <div><h3>Status history</h3>{shipment.events.length ? <ol>{shipment.events.map((entry) => <li key={entry.id}><strong>{entry.status_label}</strong><span>{displayDate(entry.occurred_at)}{entry.note ? ` · ${entry.note}` : ''}</span></li>)}</ol> : <p>No status events yet.</p>}</div>
-          </div>
-          {editingLogisticsId === shipment.id && <form className="status-note-form logistics-form" onSubmit={(event) => void updateLogistics(event, shipment)}>
-            <div><h3>Edit carrier details</h3><p>Update the courier or tracking number without changing the order or shipment status.</p></div>
-            <div className="logistics-fields"><label>Carrier<input name="carrier" maxLength={120} defaultValue={shipment.carrier} placeholder="e.g. Campus Courier" /></label><label>Tracking number<input name="tracking_number" maxLength={120} defaultValue={shipment.tracking_number} placeholder="e.g. TRK-1001" /></label></div>
-            <div className="status-note-actions"><button className="secondary" type="button" onClick={() => setEditingLogisticsId(null)}>Cancel</button><button className="primary" type="submit">Save courier details</button></div>
-          </form>}
-          {statusDraft?.shipmentId === shipment.id && <form className="status-note-form" onSubmit={(event) => { event.preventDefault(); void changeStatus(shipment, statusDraft.next, statusNote); }}>
-            <div><h3>Change status to {STATUS_LABELS[statusDraft.next]}</h3><p>{statusDraft.next === 'delivery_failed' ? 'A reason is required and will be saved in the shipment history.' : 'Add an optional note to the shipment history.'}</p></div>
-            <label>Status note<textarea value={statusNote} onChange={(event) => setStatusNote(event.target.value)} maxLength={240} required={statusDraft.next === 'delivery_failed'} rows={2} placeholder={statusDraft.next === 'delivery_failed' ? 'e.g. Recipient unavailable at delivery address' : 'Optional handling or delivery note'} /></label>
-            <div className="status-note-actions"><button className="secondary" type="button" onClick={() => { setStatusDraft(null); setStatusNote(''); }}>Cancel</button><button className="primary" type="submit">Save status update</button></div>
-          </form>}
-          </td></tr>}
-        </Fragment>) : <tr><td colSpan={7} className="empty">{error ? 'Start Django, apply migrations, then refresh.' : 'No shipments yet. Create one to begin the fulfillment workflow.'}</td></tr>}
-      </tbody></table></div>
-      <div className="table-foot">Showing {visibleShipments.length} of {shipments.length} shipments <span>Order references remain owned by the Sales &amp; Orders system</span></div>
-    </section>
-    <footer>Mini ERP · System 5: Delivery &amp; Shipments <span>API: {API}/shipments/</span></footer>
-  </section>;
+    {view !== 'overview' && <section className="surface shipment-register"><div className="section-heading"><div><span className="eyebrow">{meta.eyebrow}</span><h2>{view === 'shipments' ? 'Shipment register' : meta.title}</h2><p>{view === 'shipments' ? 'Search order references, recipients, couriers, and tracking IDs.' : `${scopeShipments.length} shipment${scopeShipments.length === 1 ? '' : 's'} in this view.`}</p></div><span className="section-counter">{scopeShipments.length} records</span></div>
+      <div className="list-toolbar"><label className="search-field"><span>⌕</span><input aria-label="Search shipments" placeholder="Search shipments…" value={query} onChange={(event) => setQuery(event.target.value)}/></label><select aria-label="Filter by status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">All statuses</option>{statusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
+      {busy ? <div className="empty-state">Loading shipments…</div> : orderedShipments.length ? <ShipmentTable shipments={orderedShipments} expanded={expanded} setExpanded={setExpanded} setEditingLogisticsId={setEditingLogisticsId} editingLogisticsId={editingLogisticsId} statusDraft={statusDraft} statusNote={statusNote} setStatusNote={setStatusNote} setStatusDraft={setStatusDraft} updateLogistics={updateLogistics} changeStatus={changeStatus} openStatusForm={openStatusForm} allowDelete={view === 'delivered'} deleteShipment={deleteDeliveredShipment}/> : <EmptyShipments error={error}/>}
+    </section>}
+    <footer className="workspace-footer"><span>Del &amp; Ship <i>·</i> Fulfillment operations</span><span>Order records remain owned by the Sales system</span></footer>
+  </div>;
+}
+
+type TableProps = {
+  shipments: Shipment[];
+  expanded: number | null;
+  setExpanded: (id: number | null) => void;
+  editingLogisticsId: number | null;
+  setEditingLogisticsId: (id: number | null) => void;
+  statusDraft: StatusDraft | null;
+  statusNote: string;
+  setStatusNote: (note: string) => void;
+  setStatusDraft: (draft: StatusDraft | null) => void;
+  updateLogistics: (event: FormEvent<HTMLFormElement>, shipment: Shipment) => void;
+  changeStatus: (shipment: Shipment, next: ShipmentStatus, note: string) => void;
+  openStatusForm: (shipment: Shipment, next: ShipmentStatus) => void;
+  allowDelete: boolean;
+  deleteShipment: (shipment: Shipment) => void;
+};
+
+function ShipmentTable(props: TableProps) {
+  const { shipments, expanded, setExpanded, editingLogisticsId, setEditingLogisticsId, statusDraft, statusNote, setStatusNote, setStatusDraft, updateLogistics, changeStatus, openStatusForm, allowDelete, deleteShipment } = props;
+  return <div className="shipment-list"><div className="shipment-list-head"><span>SHIPMENT</span><span>RECIPIENT</span><span>COURIER &amp; TRACKING</span><span>CONTENTS</span><span>STATUS</span><span>UPDATED</span><span/></div>
+    {shipments.map((shipment) => <Fragment key={shipment.id}><div className="shipment-row">
+      <div className="shipment-id-cell"><span className="shipment-package">▣</span><span><strong>{shipment.order_reference}</strong><small>SHIP-{String(shipment.id).padStart(4, '0')}</small></span></div>
+      <div className="shipment-recipient"><strong>{shipment.recipient_name}</strong><small>{shipment.delivery_address}</small></div>
+      <div className="shipment-carrier"><strong>{shipment.carrier || 'Not assigned'}</strong><small>{shipment.tracking_number || 'No tracking number'}</small></div>
+      <div className="shipment-contents"><strong>{shipment.items.length} line{shipment.items.length === 1 ? '' : 's'}</strong><small>{shipment.items.reduce((sum, item) => sum + item.quantity, 0)} total units</small></div>
+      <div><span className={`status-pill status-${shipment.status}`}>{shipment.status_label}</span></div>
+      <div className="shipment-updated">{formatDate(shipment.updated_at)}</div>
+      <div className="shipment-row-actions"><button className="details-button" type="button" aria-expanded={expanded === shipment.id} onClick={() => setExpanded(expanded === shipment.id ? null : shipment.id)}>{expanded === shipment.id ? 'Close' : 'Details'} <span>{expanded === shipment.id ? '−' : '+'}</span></button>{allowDelete && <button className="delete-button" type="button" aria-label={`Delete delivered shipment ${shipment.order_reference}`} onClick={() => deleteShipment(shipment)}>Delete</button>}</div>
+    </div>
+    {expanded === shipment.id && <div className="shipment-detail"><div className="detail-columns"><section><span className="eyebrow">DELIVERY DETAILS</span><h3>{shipment.recipient_name}</h3><p>{shipment.delivery_address}</p><div className="detail-items"><strong>Package contents</strong>{shipment.items.map((item) => <div key={item.id}><span>{item.product_name}<small>{item.product_reference || 'No item reference'}</small></span><b>× {item.quantity}</b></div>)}</div></section><section><span className="eyebrow">STATUS HISTORY</span><h3>Shipment activity</h3><ol className="event-list">{shipment.events.map((entry) => <li key={entry.id}><span className="event-dot"/><div><strong>{entry.status_label}</strong><small>{formatDate(entry.occurred_at)}{entry.note ? ` · ${entry.note}` : ''}</small></div></li>)}</ol></section></div>
+      <div className="detail-toolbar"><div><span className="eyebrow">QUICK ACTIONS</span><div className="status-actions">{NEXT_STATUS[shipment.status].map((next) => <button className="button-secondary button-small" key={next} type="button" onClick={() => openStatusForm(shipment, next)}>{STATUS_LABELS[next]}</button>)}<button className="button-secondary button-small" type="button" onClick={() => { setStatusDraft(null); setEditingLogisticsId(editingLogisticsId === shipment.id ? null : shipment.id); }}>Edit carrier details</button></div></div><small>Created {formatDate(shipment.created_at)}</small></div>
+      {editingLogisticsId === shipment.id && <form className="inline-editor" onSubmit={(event) => { event.preventDefault(); updateLogistics(event, shipment); }}><div className="editor-fields"><label>Carrier<input name="carrier" maxLength={120} defaultValue={shipment.carrier} placeholder="Carrier name"/></label><label>Tracking number<input name="tracking_number" maxLength={120} defaultValue={shipment.tracking_number} placeholder="Tracking ID"/></label></div><div className="editor-actions"><button className="button-secondary button-small" type="button" onClick={() => setEditingLogisticsId(null)}>Cancel</button><button className="button-primary button-small" type="submit">Save details</button></div></form>}
+      {statusDraft?.shipmentId === shipment.id && <form className="inline-editor status-editor" onSubmit={(event) => { event.preventDefault(); changeStatus(shipment, statusDraft.next, statusNote); }}><div><strong>Move to {STATUS_LABELS[statusDraft.next]}</strong><p>{statusDraft.next === 'delivery_failed' ? 'A reason is required and will be added to the event history.' : 'Add an optional note to the event history.'}</p></div><label>Status note<textarea value={statusNote} onChange={(event) => setStatusNote(event.target.value)} maxLength={240} required={statusDraft.next === 'delivery_failed'} rows={2} placeholder={statusDraft.next === 'delivery_failed' ? 'e.g. Recipient unavailable' : 'Optional note'}/></label><div className="editor-actions"><button className="button-secondary button-small" type="button" onClick={() => { setStatusDraft(null); setStatusNote(''); }}>Cancel</button><button className="button-primary button-small" type="submit">Save status</button></div></form>}
+    </div>}</Fragment>)}
+  </div>;
+}
+
+function EmptyShipments({ error }: { error: string }) {
+  return <div className="empty-state"><span>▤</span><strong>{error ? 'Shipment service unavailable' : 'Nothing here yet'}</strong><p>{error ? 'Check the backend and your connection, then refresh.' : 'When a shipment matches this view, it will appear here.'}</p></div>;
 }

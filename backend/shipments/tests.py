@@ -1,10 +1,15 @@
 from rest_framework.test import APITestCase
 from rest_framework import status
+from django.contrib.auth import get_user_model
 
-from .models import Shipment, ShipmentEvent
+from .models import Shipment, ShipmentEvent, ShipmentItem
 
 
 class ShipmentApiTests(APITestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(username="dispatcher", password="demo-password")
+        self.client.force_authenticate(user=self.user)
+
     def create_shipment(self):
         return self.client.post("/api/shipments/", {
             "order_reference": "ORD-TEST-1",
@@ -94,3 +99,28 @@ class ShipmentApiTests(APITestCase):
         shipment_id = created.data["id"]
         response = self.client.patch(f"/api/shipments/{shipment_id}/", {"carrier": "Courier"}, format="json")
         self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_delete_is_allowed_for_delivered_shipments_and_cascades(self):
+        created = self.create_shipment()
+        shipment_id = created.data["id"]
+        for next_status in ["packing", "ready_to_dispatch", "in_transit", "delivered"]:
+            response = self.client.post(f"/api/shipments/{shipment_id}/status/", {"status": next_status}, format="json")
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(ShipmentItem.objects.filter(shipment_id=shipment_id).exists())
+        self.assertTrue(ShipmentEvent.objects.filter(shipment_id=shipment_id).exists())
+
+        response = self.client.delete(f"/api/shipments/{shipment_id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Shipment.objects.filter(pk=shipment_id).exists())
+        self.assertFalse(ShipmentItem.objects.filter(shipment_id=shipment_id).exists())
+        self.assertFalse(ShipmentEvent.objects.filter(shipment_id=shipment_id).exists())
+
+    def test_delete_is_rejected_for_undelivered_shipments(self):
+        created = self.create_shipment()
+        shipment_id = created.data["id"]
+
+        response = self.client.delete(f"/api/shipments/{shipment_id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(Shipment.objects.filter(pk=shipment_id).exists())
