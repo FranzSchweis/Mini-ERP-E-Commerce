@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import CatalogPage from './modules/catalog/CatalogPage';
+import DeliveryPage from './modules/delivery/DeliveryPage';
 
 type ModuleKey = 'catalog' | 'sales' | 'inventory' | 'billing' | 'delivery';
 type ModuleInfo = { key: ModuleKey; name: string; system: string; short: string };
@@ -26,7 +27,7 @@ export default function App() {
     </aside>
     <main className="main">
       <header className="topbar"><div className="crumb">Mini ERP <span>/</span> {current.system} <span>/</span> {current.name}</div><div className="top-actions"><span className="connection"><i/> Local API</span></div></header>
-      {selected === 'catalog' ? <CatalogPage /> : <section className="content"><div className="module-placeholder"><div className="eyebrow">{current.system.toUpperCase()}</div><h1>{current.name}</h1><p>This is a shared placeholder for your teammate’s module.</p><p className="placeholder-help">Build the module in its own frontend folder and connect it here. The shared shell, navigation, and visual theme are already in place.</p><code>src/modules/{selected}/</code></div></section>}
+      {selected === 'catalog' ? <CatalogPage /> : selected === 'delivery' ? <DeliveryPage /> : <section className="content"><div className="module-placeholder"><div className="eyebrow">{current.system.toUpperCase()}</div><h1>{current.name}</h1><p>This is a shared placeholder for your teammate’s module.</p><p className="placeholder-help">Build the module in its own frontend folder and connect it here. The shared shell, navigation, and visual theme are already in place.</p><code>src/modules/{selected}/</code></div></section>}
     </main>
   </div>;
 }

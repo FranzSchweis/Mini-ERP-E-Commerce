@@ -1,8 +1,8 @@
-# Mini ERP — System 1: Product & Catalogue
+# Mini ERP — Product Catalogue and Delivery & Shipments
 
-This repo contains your assigned system: **Product & Catalogue Management**. It is one part of the team's ERP, not the other four systems.
+This shared repo began with **System 1: Product & Catalogue Management** and now also includes a separate **System 5: Delivery & Shipments** module. The systems share the app shell and backend project, while keeping their data ownership and feature code separate.
 
-## Your responsibility (System 1 only)
+## System 1 responsibility: Product & Catalogue
 
 You own product identity and catalogue descriptions:
 
@@ -116,3 +116,9 @@ Django REST Framework also provides update and delete routes. Coordinate any del
 3. Ask each member to use your product's ID or SKU in their order, inventory, invoice, or shipment records.
 4. Agree on one database/API environment and update the `.env` settings together.
 5. Add login/permissions only after the group agrees how authentication will work. This scaffold is for local development and currently does not protect the API.
+
+## System 5 — Delivery & Shipments
+
+The shared app now includes a separate System 5 shipment module under `backend/shipments/` and `frontend/src/modules/delivery/`. It owns shipment details and status history, while order references remain external IDs owned by Sales & Orders. The current classroom MVP allows staff to enter demo order details until the Orders API is agreed and available.
+
+See [`docs/system5-shipment-api.md`](docs/system5-shipment-api.md) for the shipment boundary, status transitions, and API contract. After pulling this branch, run `python manage.py migrate` from `backend/` before opening the Delivery & Shipments page.

@@ -18,6 +18,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "rest_framework",
     "catalog",
+    "shipments",
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
