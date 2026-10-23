@@ -38,3 +38,10 @@ th{color:#93859f;border-bottom-color:#f0e9f4}td{color:#62596f;border-bottom-colo
 .heading-actions{display:flex;gap:9px;align-items:center}.category-panel{border-color:#eadcf3;background:linear-gradient(125deg,#fff 0%,#fff9fc 100%)}.category-form{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap}.category-form label{display:grid;gap:6px;min-width:min(100%,320px);font-size:11px;color:#68768a;font-weight:600}.category-form input{font:12px 'DM Sans',sans-serif;border:1px solid #e8deef;border-radius:6px;padding:10px 11px;color:#392e4c;outline:none}.category-form input:focus{border-color:#9d67d7;box-shadow:0 0 0 3px #f0e7fa}.category-actions{display:flex;align-items:center;gap:12px}.category-actions [role=status]{font-size:11px;color:#16805f}@media(max-width:680px){.heading-actions{flex-direction:column;align-items:stretch}.category-form{align-items:stretch}.category-form label{min-width:100%}.category-actions{justify-content:space-between}}
 
 .nav-button{width:100%;border:0;text-align:left;font-family:inherit;background:transparent;cursor:pointer}.module-placeholder{max-width:720px;margin:50px auto;background:#fff;border:1px solid #ede4f3;border-radius:14px;padding:36px;box-shadow:0 10px 35px #4b286010}.module-placeholder h1{font:700 27px Manrope,sans-serif;color:#302044;margin:10px 0}.module-placeholder p{font-size:13px;color:#827690;line-height:1.6}.module-placeholder .placeholder-help{padding:14px;background:#f7f0ff;border-radius:8px}.module-placeholder code{font-size:12px;color:#7138b7;background:#f5eefb;padding:6px 9px;border-radius:5px}
+
+
+/* Standalone AyanoERP Product Management page (no shared systems sidebar). */
+.standalone-app .main{margin-left:0}
+.standalone-app .topbar .brand{padding:0;gap:10px;font-size:18px}
+.standalone-app .topbar .brand-mark{width:32px;height:32px}
+@media(max-width:680px){.standalone-app .main{margin:0}.standalone-app .topbar .brand{padding:0}}
