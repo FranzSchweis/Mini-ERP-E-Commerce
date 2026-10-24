@@ -7,6 +7,7 @@ async function request(path, options = {}) {
   try {
     res = await fetch(`${BASE}/api${path}`, {
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
       ...options,
     });
   } catch {
@@ -25,6 +26,9 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  login: (username, password) => request("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
+  me: () => request("/auth/me"),
+  logout: () => request("/auth/logout", { method: "POST" }),
   list: (params = {}) => request(`/inventory?${new URLSearchParams(params)}`),
   summary: () => request("/inventory/summary"),
   get: (id) => request(`/inventory/${id}`),

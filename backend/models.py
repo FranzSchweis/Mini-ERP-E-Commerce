@@ -82,7 +82,8 @@ class StockMovement(db.Model):
     reference_type = db.Column(db.String(30), nullable=True)
     reference_id = db.Column(db.String(40), nullable=True)
     note = db.Column(db.Text, nullable=True)
-    performed_by_id = db.Column(db.Integer, db.ForeignKey("auth_user.id"), nullable=True)
+    # Shared reference to Django auth_user; Flask does not model that table.
+    performed_by_id = db.Column(db.Integer, nullable=True)
     occurred_at = db.Column(db.DateTime(6), nullable=False)
 
     product = db.relationship("Product", lazy="joined")
@@ -112,7 +113,8 @@ class PurchaseOrder(db.Model):
     expected_at = db.Column(db.Date)
     currency = db.Column(db.String(3), nullable=False, default="PHP")
     notes = db.Column(db.Text)
-    created_by_id = db.Column(db.Integer, db.ForeignKey("auth_user.id"))
+    # Shared reference to Django auth_user; Flask does not model that table.
+    created_by_id = db.Column(db.Integer)
     created_at = db.Column(db.DateTime(6), nullable=False)
 
     supplier = db.relationship("Supplier", lazy="joined")

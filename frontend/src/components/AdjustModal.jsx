@@ -11,7 +11,8 @@ const MODES = [
  * item: the product to adjust. If null, the user picks one from `items`.
  */
 export default function AdjustModal({ item, items, onClose, onSaved }) {
-  const [selectedId, setSelectedId] = useState(item?.id ?? items[0]?.id ?? "");
+  const adjustableItems = items.filter((i) => i.id != null);
+  const [selectedId, setSelectedId] = useState(item?.id ?? adjustableItems[0]?.id ?? "");
   const [mode, setMode] = useState("add");
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
@@ -79,7 +80,7 @@ export default function AdjustModal({ item, items, onClose, onSaved }) {
                 <input value={item.product_name} disabled />
               ) : (
                 <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
-                  {items.map((i) => (
+                  {adjustableItems.map((i) => (
                     <option key={i.id} value={i.id}>
                       {i.product_name} {i.sku ? `(${i.sku})` : ""}
                     </option>

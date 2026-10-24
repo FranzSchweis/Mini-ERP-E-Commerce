@@ -111,6 +111,14 @@ Receiving requires an `idempotency_key`. Repeating a request with the same key d
 
 ## Authentication
 
-Authentication is intentionally not guessed in this Flask stage. The team must decide whether Django will issue JWT tokens, share sessions, or use an internal service token. Once the team confirms the integration method, add a Flask authentication middleware and send the authenticated Django user ID as `performed_by_id` or `created_by_id`.
+The Inventory UI uses a simple Flask session login and does not require new database tables. Set these values in `backend/.env`:
+
+```text
+INVENTORY_USERNAME=inventory
+INVENTORY_PASSWORD=change-this-password
+INVENTORY_SECRET_KEY=replace-with-a-long-random-secret
+```
+
+Sign in through the frontend after starting Flask. Inventory API routes require the session cookie; `/health` and the login endpoints remain available for the frontend startup flow. The login endpoints are `/api/auth/login`, `/api/auth/me`, and `/api/auth/logout`.
 
 Never commit `.env`, passwords, or secret keys.

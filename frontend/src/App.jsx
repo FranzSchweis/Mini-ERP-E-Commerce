@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import Login from "./components/Login";
 import Shell from "./components/Shell";
 import InventoryList from "./components/InventoryList";
 import InventoryDetail from "./components/InventoryDetail";
@@ -8,6 +9,8 @@ import ProductModal from "./components/ProductModal";
 import { OverviewPage, ProductCatalogPage } from "./components/WorkspacePages";
 
 export default function App() {
+  const [user, setUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [items, setItems] = useState([]);
   const [activePage, setActivePage] = useState("overview");
   const [movements, setMovements] = useState([]);
@@ -23,6 +26,13 @@ export default function App() {
   const [modal, setModal] = useState(null); // {type: "adjust"|"product", item?}
   const [toast, setToast] = useState("");
   const searchRef = useRef(null);
+
+  useEffect(() => {
+    api.me()
+      .then(setUser)
+      .catch(() => setUser(null))
+      .finally(() => setAuthChecked(true));
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -42,9 +52,10 @@ export default function App() {
 
   // Reload when filters change (debounced so typing doesn't spam the API).
   useEffect(() => {
+    if (!user) return undefined;
     const timer = setTimeout(load, 250);
     return () => clearTimeout(timer);
-  }, [load]);
+  }, [load, user]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -56,6 +67,19 @@ export default function App() {
     setReloadKey((k) => k + 1);
     return load();
   };
+
+  async function login(username, password) {
+    const signedIn = await api.login(username, password);
+    setUser(signedIn);
+  }
+
+  async function logout() {
+    await api.logout().catch(() => undefined);
+    setUser(null);
+    setItems([]);
+    setSummary(null);
+    setDetail(null);
+  }
 
   async function openDetail(id) {
     try {
@@ -108,14 +132,18 @@ export default function App() {
     setTimeout(() => searchRef.current?.focus(), 0);
   };
 
+  if (!authChecked) return <main className="auth-page"><p className="auth-loading">Loading…</p></main>;
+  if (!user) return <Login onLogin={login} />;
+
   return (
     <Shell
       crumb={detail ? detail.product_name : "Inventory & stock"}
       onHome={goHome}
-      onRefresh={refresh}
       onFocusSearch={focusSearch}
       activePage={activePage}
       onNavigate={navigate}
+      onLogout={logout}
+      username={user.username}
     >
       {activePage === "overview" && !detail ? (
         <OverviewPage summary={summary} items={items} loading={loading} onNavigate={navigate} />

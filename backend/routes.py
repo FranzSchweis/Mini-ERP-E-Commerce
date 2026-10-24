@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 from sqlalchemy import func, or_
 
 from models import (
@@ -24,6 +24,12 @@ from models import (
 
 bp = Blueprint("inventory", __name__, url_prefix="/api")
 VALID_PO_STATUSES = {"draft", "ordered", "partially_received", "received", "cancelled"}
+
+
+@bp.before_request
+def require_login():
+    if not session.get("inventory_user"):
+        return jsonify({"error": "Login required."}), 401
 
 
 class ApiError(Exception):

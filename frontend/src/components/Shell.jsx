@@ -29,7 +29,7 @@ function NavList({ activePage, onNavigate }) {
   );
 }
 
-export default function Shell({ crumb, onHome, onRefresh, onFocusSearch, activePage, onNavigate, children }) {
+export default function Shell({ crumb, onHome, onFocusSearch, activePage, onNavigate, onLogout, username, children }) {
   const [menuOpen, setMenuOpen] = useState(false);
 
   const navigate = (page) => {
@@ -52,11 +52,6 @@ export default function Shell({ crumb, onHome, onRefresh, onFocusSearch, activeP
           <p className="nav-label">Inventory workspace</p>
           <NavList activePage={activePage} onNavigate={navigate} />
         </nav>
-        <div className="sidebar-foot">
-          <p>Inventory service</p>
-          <span>Connected to shared mini_erp schema</span>
-          <button type="button" onClick={onRefresh}>Refresh inventory</button>
-        </div>
       </aside>
 
       <main>
@@ -80,11 +75,9 @@ export default function Shell({ crumb, onHome, onRefresh, onFocusSearch, activeP
             </button>
           </div>
           <div className="operator">
-            <span>IM</span>
-            <div>
-              <strong>Inventory Staff</strong>
-              <small>Inventory team</small>
-            </div>
+            <span>{username?.slice(0, 2).toUpperCase()}</span>
+            <div><strong>{username}</strong><small>Inventory</small></div>
+            <button type="button" className="signout-button" onClick={onLogout}>Sign out</button>
           </div>
         </header>
 

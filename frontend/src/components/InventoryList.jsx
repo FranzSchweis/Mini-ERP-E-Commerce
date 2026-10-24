@@ -111,13 +111,13 @@ export default function InventoryList({
                 </tr>
               </thead>
               <tbody>
-                {items.map((item) => (
+                {items.map((item, index) => (
                   <tr
-                    key={item.id}
-                    tabIndex={0}
-                    onClick={() => onOpen(item.id)}
+                    key={item.id ?? item.product_id ?? item.sku ?? `inventory-row-${index}`}
+                    tabIndex={item.id ? 0 : -1}
+                    onClick={() => item.id && onOpen(item.id)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") onOpen(item.id);
+                      if (e.key === "Enter" && item.id) onOpen(item.id);
                     }}
                   >
                     <td>
